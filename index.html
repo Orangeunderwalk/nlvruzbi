@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phasmo 2D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #d8d8d0; font-family: "Courier New", monospace; overflow: hidden; }
+  #wrap { position: relative; width: min(100vw, 160vh); aspect-ratio: 960 / 600; margin: 0 auto; top: 50%; transform: translateY(-50%); }
+  canvas { width: 100%; height: 100%; display: block; cursor: crosshair; }
+  .overlay { position: absolute; inset: 0; background: rgba(4, 4, 8, 0.93); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2% 5%; box-sizing: border-box; font-size: clamp(9px, 1.5vw, 15px); overflow: auto; }
+  .hidden { display: none; }
+  h1 { letter-spacing: 0.4em; color: #e8e2c8; margin: 0 0 0.3em; text-shadow: 0 0 18px #6aa; }
+  h2 { margin: 0.4em 0; color: #e8e2c8; }
+  button { font: inherit; background: #1c2a2a; color: #d8f0e8; border: 1px solid #5a8; padding: 0.5em 1.4em; cursor: pointer; margin: 0.4em; }
+  button:hover:not(:disabled) { background: #2c4a44; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .cols { display: flex; gap: 3em; align-items: flex-start; }
+  .keys td { padding: 0.1em 0.8em 0.1em 0; }
+  .keys td:first-child { color: #9fd; }
+  .ev, .gh { cursor: pointer; padding: 0.2em 0.5em; user-select: none; border: 1px solid transparent; }
+  .ev:hover, .gh:hover { border-color: #456; }
+  .ev.s1 { color: #8f8; } .ev.s2 { color: #f66; text-decoration: line-through; }
+  .gh.out { opacity: 0.25; text-decoration: line-through; }
+  .gh.sel { border-color: #fd6; color: #fd6; }
+  .ghosts { display: grid; grid-template-columns: 1fr 1fr; }
+  .dim { color: #889; }
+  #ghinfo { min-height: 3.2em; max-width: 34em; margin-top: 0.6em; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="960" height="600"></canvas>
+
+  <div id="start" class="overlay">
+    <h1>PHASMO 2D</h1>
+    <p class="dim">A ghost haunts this house. Find three pieces of evidence, identify it, and get out alive.</p>
+    <div class="cols">
+      <table class="keys">
+        <tr><td>WASD</td><td>Move</td></tr>
+        <tr><td>Mouse</td><td>Aim flashlight</td></tr>
+        <tr><td>Shift</td><td>Sprint</td></tr>
+        <tr><td>E</td><td>Pick up / light switch</td></tr>
+        <tr><td>G</td><td>Drop / place item</td></tr>
+        <tr><td>1 2 3 / wheel</td><td>Select hand slot</td></tr>
+        <tr><td>Click</td><td>Use item (ask Spirit Box, take pills)</td></tr>
+        <tr><td>F</td><td>Flashlight</td></tr>
+        <tr><td>J</td><td>Journal (leave from the truck)</td></tr>
+      </table>
+      <div style="max-width: 26em">
+        <div>• Grab up to 3 tools from the truck.</div>
+        <div>• Darkness drains sanity. Low sanity lets the ghost <b>hunt</b>.</div>
+        <div>• During a hunt the front door locks. Break line of sight or hide in a closet with your flashlight off.</div>
+        <div>• Book, D.O.T.S and crucifix work when placed on the floor near the ghost.</div>
+        <div>• Spirit Box only answers in the dark, near the ghost.</div>
+      </div>
+    </div>
+    <button id="startBtn">START INVESTIGATION</button>
+  </div>
+
+  <div id="journal" class="overlay hidden">
+    <h2>JOURNAL</h2>
+    <div class="cols">
+      <div>
+        <div class="dim">Evidence (click: found → ruled out)</div>
+        <div id="evlist"></div>
+      </div>
+      <div>
+        <div class="dim">Ghost type (click to select)</div>
+        <div id="ghlist" class="ghosts"></div>
+      </div>
+    </div>
+    <div id="ghinfo" class="dim"></div>
+    <div>
+      <button id="closeJ">CLOSE (J)</button>
+      <button id="leaveBtn">LEAVE IN TRUCK</button>
+    </div>
+  </div>
+
+  <div id="end" class="overlay hidden"></div>
+</div>
+
+<script>
+'use strict';
+const T = 32, W = 960, H = 600;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const lc = document.createElement('canvas'); lc.width = W; lc.height = H;
+const L = lc.getContext('2d');
+const $ = id => document.getElementById(id);
+const rnd = (a = 1, b) => b === undefined ? Math.random() * a : a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/* ---------- Map ----------
+   # wall, a-h room floor, UPPERCASE light switch of that room, + doorway, = front door,
+   k closet (hiding spot), o furniture (blocks movement, not sight), X truck wall, t truck floor */
+const HOUSE = [
+  '#####A########B##########C######',
+  '#kaoooooa#bbbbbbbbb#ccoooocccck#',
+  '#aaaaaaaa#bbbbbbbbb#ccccccccccc#',
+  '#aaaaaaaa#bbbooobbb#ccccccccccc#',
+  '#aaaaaaaa#bbbooobbb#cccccoocccc#',
+  '#aaaaaaaa#bbbbbbbbb#ccccccccccc#',
+  '####+#########+##########+###H##',
+  '#hhhhhhhhhhhhhhhhhhhhhhhhhhhhhh#',
+  '#hhhhhhhhhhhhhhhhhhhhhhhhhhhhhh#',
+  '####+#D###E#+#####hhh##F##+#####',
+  '#ddddddd#eeeeeeee#hhh#fffffffff#',
+  '#ddddddd#eeeeeeee#hhh#fffooofff#',
+  '#ddddddd#eeeeooee#hhh#fffooofff#',
+  '#ooddddd#eeeeooee#hhh#fffooofff#',
+  '#ooddddo#eeeeeeek#hhh#ffffffffk#',
+  '###################=############',
+  '',
+  '',
+  '               XXXXtXXXX',
+  '               XtttttttX',
+  '               XtttttttX',
+  '               XtttttttX',
+  '               XXXXXXXXX',
+];
+const MX = 4, MY = 3, GW = 40, GH = HOUSE.length + MY * 2;
+const grid = [];
+for (let y = 0; y < GH; y++) {
+  const row = HOUSE[y - MY] || '';
+  grid.push((' '.repeat(MX) + row).padEnd(GW, ' ').split(''));
+}
+const ROOMS = {
+  a: { name: 'Kitchen', col: '#6a6658', furn: '#8a8f94' },
+  b: { name: 'Dining Room', col: '#66523f', furn: '#7a5530' },
+  c: { name: 'Living Room', col: '#565a6c', furn: '#3b4f78' },
+  d: { name: 'Bathroom', col: '#58696c', furn: '#c9d3d6' },
+  e: { name: 'Bedroom', col: '#6a5565', furn: '#8a3f52' },
+  f: { name: 'Garage', col: '#5c5c5c', furn: '#8a2424' },
+  h: { name: 'Hallway', col: '#655c48', furn: '#555' },
+};
+const isRoomCh = c => c >= 'a' && c <= 'h';
+const roomMap = grid.map(r => r.map(c => isRoomCh(c) ? c : c === 't' ? 'truck' : null));
+const roomTiles = {}, switches = [], doors = [];
+const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+for (let pass = 0; pass < 3; pass++)
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    if (!'+ko'.includes(grid[y][x]) || roomMap[y][x]) continue;
+    for (const [dx, dy] of N4) { const r = roomMap[y + dy]?.[x + dx]; if (r && r !== 'truck') { roomMap[y][x] = r; break; } }
+  }
+for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+  const c = grid[y][x];
+  if (isRoomCh(c)) (roomTiles[c] = roomTiles[c] || []).push([x, y]);
+  else if (c === '+' || c === '=') doors.push({ x: x + 0.5, y: y + 0.5 });
+  else if (c >= 'A' && c <= 'H') {
+    const room = c.toLowerCase();
+    const n = N4.find(([dx, dy]) => grid[y + dy]?.[x + dx] === room) || [0, 0];
+    switches.push({ tx: x, ty: y, x: x + 0.5, y: y + 0.5, room, fx: x + 0.5 + n[0] * 0.32, fy: y + 0.5 + n[1] * 0.32 });
+  }
+}
+const houseTiles = Object.values(roomTiles).flat();
+const ch = (x, y) => grid[y]?.[x];
+function solid(tx, ty) { // blocks sight and movement
+  const c = ch(tx, ty);
+  return c === undefined || c === '#' || (c >= 'A' && c <= 'Z') || (c === '=' && S.locked);
+}
+const blocked = (tx, ty) => solid(tx, ty) || ch(tx, ty) === 'o';
+const ghostWalk = (tx, ty) => { const c = ch(tx, ty); return isRoomCh(c) || c === '+' || c === 'k'; };
+const roomOf = (x, y) => roomMap[Math.floor(y)]?.[Math.floor(x)] || null;
+function los(a, b) {
+  const d = dist(a, b), n = Math.ceil(d / 0.1);
+  for (let i = 1; i < n; i++) { const t = i / n; if (solid(Math.floor(a.x + (b.x - a.x) * t), Math.floor(a.y + (b.y - a.y) * t))) return false; }
+  return true;
+}
+function findPath(sx, sy, tx, ty) {
+  if (!ghostWalk(tx, ty)) return [];
+  const prev = new Map(), key = (x, y) => y * GW + x, q = [[sx, sy]];
+  prev.set(key(sx, sy), -1);
+  for (let i = 0; i < q.length; i++) {
+    const [x, y] = q[i];
+    if (x === tx && y === ty) {
+      const out = []; let k = key(x, y);
+      while (prev.get(k) !== -1) { out.unshift([k % GW, Math.floor(k / GW)]); k = prev.get(k); }
+      return out;
+    }
+    for (const [dx, dy] of N4) {
+      const nx = x + dx, ny = y + dy, k = key(nx, ny);
+      if (!prev.has(k) && ghostWalk(nx, ny)) { prev.set(k, key(x, y)); q.push([nx, ny]); }
+    }
+  }
+  return [];
+}
+
+/* ---------- Game data ---------- */
+const EV = { EMF: 'EMF Level 5', BOX: 'Spirit Box', UV: 'Fingerprints', ORB: 'Ghost Orbs', WRITE: 'Ghost Writing', FREEZE: 'Freezing Temperatures', DOTS: 'D.O.T.S Projector' };
+const GHOSTS = [
+  { name: 'Spirit', ev: ['EMF', 'BOX', 'WRITE'], info: 'The most common ghost. No particular strengths.' },
+  { name: 'Wraith', ev: ['EMF', 'BOX', 'DOTS'], info: 'Drifts far from its room more often than other ghosts.', roam: 0.6 },
+  { name: 'Phantom', ev: ['BOX', 'UV', 'DOTS'], info: 'Much harder to see during a hunt.', flick: 0.2 },
+  { name: 'Poltergeist', ev: ['BOX', 'UV', 'WRITE'], info: 'A noisy ghost that interacts far more often.', act: 1.5 },
+  { name: 'Banshee', ev: ['UV', 'ORB', 'DOTS'], info: 'Fixated on its target; starts hunts more eagerly.', eager: 2 },
+  { name: 'Jinn', ev: ['EMF', 'UV', 'FREEZE'], info: 'Very fast when it sees its victim from far away.' },
+  { name: 'Mare', ev: ['BOX', 'ORB', 'WRITE'], info: 'Hunts sooner (60%) in the dark, later (40%) with lights on.' },
+  { name: 'Revenant', ev: ['ORB', 'WRITE', 'FREEZE'], info: 'Slow while searching, terrifyingly fast once it sees you.' },
+  { name: 'Shade', ev: ['EMF', 'WRITE', 'FREEZE'], info: 'Shy. Less active and only hunts below 35% sanity.', act: 0.6, thr: 35 },
+  { name: 'Demon', ev: ['UV', 'WRITE', 'FREEZE'], info: 'Aggressive. Can hunt from 70% sanity.', thr: 70 },
+  { name: 'Yurei', ev: ['ORB', 'FREEZE', 'DOTS'], info: 'Drains sanity noticeably faster.', drain: 1.5 },
+  { name: 'Oni', ev: ['EMF', 'FREEZE', 'DOTS'], info: 'Very active and more visible during hunts.', act: 1.4, flick: 0.8 },
+];
+const ITEMS = {
+  emf: { name: 'EMF Reader', col: '#c33', g: 'E' },
+  box: { name: 'Spirit Box', col: '#b84', g: 'S' },
+  uv: { name: 'UV Light', col: '#93f', g: 'U' },
+  thermo: { name: 'Thermometer', col: '#4bd', g: 'T' },
+  cam: { name: 'Video Camera', col: '#5a5', g: 'V' },
+  book: { name: 'Ghost Book', col: '#dca', g: 'B' },
+  dots: { name: 'D.O.T.S Projector', col: '#3e6', g: 'D' },
+  cruc: { name: 'Crucifix', col: '#ddd', g: '✝' },
+  pills: { name: 'Sanity Pills', col: '#e7a', g: 'P' },
+};
+const BOX_WORDS = ['GET OUT', 'BEHIND YOU', 'DEATH', "I'M HERE", 'CLOSE', 'LEAVE', 'KILL', 'AWAY'];
+
+let S = { locked: false, running: false };
+const journal = { ev: {}, guess: null };
+
+function newGame() {
+  const type = pick(GHOSTS), fav = pick('abcdef'.split(''));
+  const [gx, gy] = pick(roomTiles[fav]);
+  const tx0 = MX + 16, ty0 = MY + 19; // truck interior top-left
+  const spots = [[0, 2], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [0, 1], [6, 1]];
+  S = {
+    running: true, time: 0, locked: false, hunt: null, huntCd: 45, event: 0, eventCd: rnd(20, 35),
+    p: { x: tx0 + 3.5, y: ty0 + 0.5, ang: -Math.PI / 2, sanity: 100, stamina: 1, flash: true },
+    inv: [null, null, null], sel: 0,
+    items: Object.keys(ITEMS).map((k, i) => ({ type: k, x: tx0 + spots[i][0] + 0.5, y: ty0 + spots[i][1] + 0.5, held: false, uses: 2, written: false })),
+    ghost: { type, fav, x: gx + 0.5, y: gy + 0.5, path: [], wait: 1, actT: rnd(6, 10), speedUp: 0, sawT: 0, lastSeen: null, dotsT: 0, repath: 0 },
+    lit: {}, temp: {}, emf: [], prints: [], msgs: [], activity: 0,
+    orbs: [0, 1, 2].map(() => { const [x, y] = pick(roomTiles[fav]); return { x: x + 0.5, y: y + 0.5, vx: rnd(-0.4, 0.4), vy: rnd(-0.4, 0.4) }; }),
+    thermoRead: 16, thermoT: 0, emfRead: 1, boxText: '', boxT: 0, boxCd: 0, beepT: 0, heartT: 0, secT: 0, flickA: 1,
+  };
+  for (const r in ROOMS) { S.lit[r] = false; S.temp[r] = r === fav ? 9 : rnd(15, 18); }
+  journal.ev = {}; journal.guess = null;
+}
+
+/* ---------- Audio ---------- */
+let AC = null, noiseBuf = null, staticGain = null;
+function initAudio() {
+  if (AC) return;
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = AC.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2400;
+    staticGain = AC.createGain(); staticGain.gain.value = 0;
+    src.connect(bp).connect(staticGain).connect(AC.destination); src.start();
+  } catch (e) { AC = null; }
+}
+function beep(f, d, v = 0.05, type = 'square') {
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.value = f; g.gain.value = v;
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + d);
+  o.connect(g).connect(AC.destination); o.start(); o.stop(AC.currentTime + d);
+}
+function thud(v = 0.3, f = 200, d = 0.25) {
+  if (!AC) return;
+  const s = AC.createBufferSource(), lp = AC.createBiquadFilter(), g = AC.createGain();
+  s.buffer = noiseBuf; lp.type = 'lowpass'; lp.frequency.value = f; g.gain.value = v;
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + d);
+  s.connect(lp).connect(g).connect(AC.destination); s.start(0, Math.random() * 0.5, d);
+}
+const volAt = o => Math.max(0, 1 - dist(o, S.p) / 14);
+function say(text) {
+  try { const u = new SpeechSynthesisUtterance(text); u.pitch = 0.1; u.rate = 0.6; u.volume = 0.8; speechSynthesis.speak(u); } catch (e) { /* optional */ }
+}
+
+/* ---------- Input ---------- */
+const keys = {}, mouse = { x: W / 2, y: 0 };
+addEventListener('keydown', e => {
+  if (e.repeat) return;
+  keys[e.code] = true;
+  if (!S.running) return;
+  if (e.code === 'KeyJ') return toggleJournal();
+  if (!$('journal').classList.contains('hidden')) return;
+  if (e.code === 'KeyE') interactKey();
+  else if (e.code === 'KeyG') dropItem();
+  else if (e.code === 'KeyF') { S.p.flash = !S.p.flash; beep(900, 0.03, 0.03); }
+  else if (/^Digit[123]$/.test(e.code)) S.sel = +e.code[5] - 1;
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+cv.addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect();
+  mouse.x = (e.clientX - r.left) / r.width * W; mouse.y = (e.clientY - r.top) / r.height * H;
+});
+cv.addEventListener('mousedown', e => { if (e.button === 0 && S.running) useItem(); });
+cv.addEventListener('wheel', e => { e.preventDefault(); if (S.running) S.sel = (S.sel + (e.deltaY > 0 ? 1 : 2)) % 3; }, { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+function msg(text) { S.msgs.push({ text, t: 4 }); if (S.msgs.length > 4) S.msgs.shift(); }
+const held = () => S.inv[S.sel];
+const heldIs = t => held()?.type === t;
+const dotsOn = it => it.type === 'dots' && !it.held && !!ROOMS[roomOf(it.x, it.y)]; // only projects inside the house
+
+function interactKey() {
+  const p = S.p;
+  const sw = switches.filter(s => dist(s, p) < 1.5).sort((a, b) => dist(a, p) - dist(b, p))[0];
+  const it = S.items.filter(i => !i.held && dist(i, p) < 1.2).sort((a, b) => dist(a, p) - dist(b, p))[0];
+  if (it && (!sw || dist(it, p) < dist(sw, p))) {
+    let slot = S.inv[S.sel] ? S.inv.indexOf(null) : S.sel;
+    if (slot < 0) return msg('Hands full — drop something with G');
+    it.held = true; S.inv[slot] = it; S.sel = slot; beep(500, 0.04, 0.03, 'sine');
+  } else if (sw) {
+    S.lit[sw.room] = !S.lit[sw.room]; beep(1400, 0.02, 0.05);
+  }
+}
+function dropItem() {
+  const it = held(), p = S.p;
+  if (!it) return;
+  let x = p.x + Math.cos(p.ang) * 0.7, y = p.y + Math.sin(p.ang) * 0.7;
+  if (blocked(Math.floor(x), Math.floor(y)) || !los(p, { x, y })) { x = p.x; y = p.y; }
+  it.held = false; it.x = x; it.y = y; S.inv[S.sel] = null; thud(0.08, 600, 0.08);
+}
+function useItem() {
+  const it = held(), p = S.p, g = S.ghost;
+  if (!it) return;
+  if (it.type === 'pills') {
+    p.sanity = Math.min(100, p.sanity + 40); S.items.splice(S.items.indexOf(it), 1); S.inv[S.sel] = null;
+    msg('You take the sanity pills.');
+  } else if (it.type === 'box' && S.boxCd <= 0) {
+    S.boxCd = 3; S.boxT = 3;
+    const r = roomOf(p.x, p.y);
+    const ok = g.type.ev.includes('BOX') && ROOMS[r] && !S.lit[r] && roomOf(g.x, g.y) === r && dist(g, p) < 6;
+    if (ok && Math.random() < 0.6) { S.boxText = pick(BOX_WORDS); say(S.boxText); beep(90, 0.5, 0.08, 'sawtooth'); }
+    else S.boxText = '. . .';
+  }
+}
+
+/* ---------- Journal ---------- */
+function possible(g) {
+  for (const k in journal.ev) {
+    if (journal.ev[k] === 1 && !g.ev.includes(k)) return false;
+    if (journal.ev[k] === 2 && g.ev.includes(k)) return false;
+  }
+  return true;
+}
+function renderJournal() {
+  $('evlist').innerHTML = Object.keys(EV).map(k => `<div class="ev s${journal.ev[k] || 0}" data-k="${k}">${['☐', '☑', '☒'][journal.ev[k] || 0]} ${EV[k]}</div>`).join('');
+  $('ghlist').innerHTML = GHOSTS.map(g => `<div class="gh ${possible(g) ? '' : 'out'} ${journal.guess === g.name ? 'sel' : ''}" data-g="${g.name}">${g.name}</div>`).join('');
+  const g = GHOSTS.find(g => g.name === journal.guess);
+  $('ghinfo').innerHTML = g ? `<b>${g.name}</b> — ${g.ev.map(e => EV[e]).join(', ')}<br>${g.info}` : 'No ghost selected.';
+  const inTruck = roomOf(S.p.x, S.p.y) === 'truck';
+  $('leaveBtn').disabled = !inTruck;
+  $('leaveBtn').textContent = inTruck ? 'LEAVE IN TRUCK' : 'LEAVE (return to truck first)';
+}
+function toggleJournal() { $('journal').classList.toggle('hidden'); renderJournal(); }
+$('evlist').onclick = e => { const k = e.target.dataset.k; if (k) { journal.ev[k] = ((journal.ev[k] || 0) + 1) % 3; renderJournal(); } };
+$('ghlist').onclick = e => { const g = e.target.dataset.g; if (g) { journal.guess = journal.guess === g ? null : g; renderJournal(); } };
+$('ghlist').onmouseover = e => { const g = GHOSTS.find(g => g.name === e.target.dataset.g); if (g) $('ghinfo').innerHTML = `<b>${g.name}</b> — ${g.ev.map(e => EV[e]).join(', ')}<br>${g.info}`; };
+$('closeJ').onclick = toggleJournal;
+$('leaveBtn').onclick = () => endGame(false);
+$('startBtn').onclick = () => { initAudio(); newGame(); $('start').classList.add('hidden'); };
+
+function endGame(dead) {
+  S.running = false; S.locked = false;
+  if (staticGain) staticGain.gain.value = 0;
+  const g = S.ghost.type, right = journal.guess === g.name;
+  $('journal').classList.add('hidden');
+  const pay = dead ? 0 : (right ? 100 : 10);
+  $('end').innerHTML = `
+    <h1 style="color:${dead ? '#c33' : right ? '#8f8' : '#fd6'}">${dead ? 'YOU DIED' : right ? 'CONTRACT COMPLETE' : 'WRONG GHOST'}</h1>
+    <p>The ghost was a <b style="color:#fd6">${g.name}</b> haunting the ${ROOMS[S.ghost.fav].name}.</p>
+    <p class="dim">Evidence: ${g.ev.map(e => EV[e]).join(' · ')}</p>
+    <p>Your guess: <b>${journal.guess || 'none'}</b> ${right ? '✔' : '✘'} &nbsp; Payout: $${pay}</p>
+    <button id="again">NEW CONTRACT</button>`;
+  $('end').classList.remove('hidden');
+  $('again').onclick = () => { $('end').classList.add('hidden'); newGame(); };
+}
+
+/* ---------- Simulation ---------- */
+function hits(x, y, r) {
+  for (const sx of [-r, r]) for (const sy of [-r, r]) if (blocked(Math.floor(x + sx), Math.floor(y + sy))) return true;
+  return false;
+}
+function addEmf(x, y, lvl) {
+  if (S.ghost.type.ev.includes('EMF') && Math.random() < 0.33) lvl = 5;
+  S.emf.push({ x, y, lvl, t: 20 }); S.activity = Math.min(10, S.activity + 1.5);
+}
+function addPrint(x, y) { if (S.ghost.type.ev.includes('UV')) S.prints.push({ x, y, t: 90, rot: rnd(6.3) }); }
+
+function ghostInteract() {
+  const g = S.ghost, r = roomOf(g.x, g.y);
+  const book = S.items.find(i => i.type === 'book' && !i.held && !i.written && dist(i, g) < 3.5);
+  const door = doors.filter(d => dist(d, g) < 4).sort((a, b) => dist(a, g) - dist(b, g))[0];
+  if (book && g.type.ev.includes('WRITE') && Math.random() < 0.5) {
+    book.written = true; addEmf(book.x, book.y, 2); thud(0.15 * volAt(book), 1500, 0.4);
+  } else if (ROOMS[r] && S.lit[r] && Math.random() < 0.4) {
+    const sw = switches.find(s => s.room === r);
+    S.lit[r] = false; addEmf(sw.fx, sw.fy, 2); addPrint(sw.fx, sw.fy); beep(1400, 0.02, 0.05 * volAt(sw));
+  } else if (door && Math.random() < 0.5) {
+    addEmf(door.x, door.y, 2); addPrint(door.x + rnd(-0.3, 0.3), door.y + rnd(-0.3, 0.3)); thud(0.25 * volAt(door), 500, 0.3);
+  } else {
+    addEmf(g.x, g.y, 3); thud(0.4 * volAt(g), 180, 0.35);
+  }
+}
+function startHunt() {
+  const g = S.ghost;
+  const c = S.items.find(i => i.type === 'cruc' && !i.held && i.uses > 0 && dist(i, g) < 3.5);
+  if (c) { c.uses--; S.huntCd = 20; beep(300, 0.6, 0.05, 'sine'); return; }
+  S.hunt = { t: 24, grace: 3 }; S.locked = true;
+  g.path = []; g.lastSeen = null; g.speedUp = 0; g.sawT = 0;
+  thud(0.5, 300, 0.5);
+}
+function ghostSees() {
+  const g = S.ghost, p = S.p;
+  if (dist(g, p) > 13 || !los(g, p)) return false;
+  const hidden = ch(Math.floor(p.x), Math.floor(p.y)) === 'k' && !p.flash;
+  if (!hidden) g.sawT = 0.7;
+  return !hidden || g.sawT > 0;
+}
+function followPath(g, speed, dt) {
+  if (!g.path.length) return;
+  const tx = g.path[0][0] + 0.5, ty = g.path[0][1] + 0.5, d = Math.hypot(tx - g.x, ty - g.y), step = speed * dt;
+  if (d <= step) { g.x = tx; g.y = ty; g.path.shift(); }
+  else { g.x += (tx - g.x) / d * step; g.y += (ty - g.y) / d * step; }
+}
+const gTile = g => [Math.floor(g.x), Math.floor(g.y)];
+
+function updateGhost(dt) {
+  const g = S.ghost, p = S.p, ty = g.type;
+  const inHouse = !!ROOMS[roomOf(p.x, p.y)];
+  g.sawT -= dt; g.dotsT -= dt;
+  if (S.hunt) {
+    const h = S.hunt;
+    h.t -= dt;
+    if (h.grace > 0) { h.grace -= dt; return; }
+    const see = ghostSees(), d = dist(g, p);
+    if (see) { g.lastSeen = { x: p.x, y: p.y }; g.speedUp = Math.min(1, g.speedUp + dt / 8); }
+    else g.speedUp = Math.max(0, g.speedUp - dt / 5);
+    let speed = 2.5 * (1 + 0.6 * g.speedUp);
+    if (ty.name === 'Revenant') speed = see ? 4.8 : 1.5;
+    if (ty.name === 'Jinn' && see && d > 4) speed = 4.6;
+    g.repath -= dt;
+    if (see && d < 1.3) { g.x += (p.x - g.x) / d * speed * dt; g.y += (p.y - g.y) / d * speed * dt; g.path = []; }
+    else {
+      if (g.repath <= 0 || !g.path.length) {
+        g.repath = 0.25;
+        const [sx, sy] = gTile(g);
+        let t = see ? p : g.lastSeen;
+        if (t && !see && dist(g, t) < 0.6) t = g.lastSeen = null;
+        if (t) g.path = findPath(sx, sy, Math.floor(t.x), Math.floor(t.y));
+        else if (!g.path.length) g.path = findPath(sx, sy, ...pick(houseTiles));
+      }
+      followPath(g, speed, dt);
+    }
+    if (dist(g, p) < 0.5) return endGame(true);
+    if (h.t <= 0) { S.hunt = null; S.locked = false; S.huntCd = 25; g.path = []; }
+    return;
+  }
+  // roaming
+  if (g.path.length) followPath(g, 1.4, dt);
+  else if ((g.wait -= dt) <= 0) {
+    g.wait = rnd(1, 5);
+    const far = Math.random() < (ty.roam || 0.2);
+    g.path = findPath(...gTile(g), ...pick(far ? houseTiles : roomTiles[g.fav]));
+  }
+  const mult = (ty.act || 1) * (1 + (100 - p.sanity) / 100);
+  if ((g.actT -= dt * mult) <= 0) { g.actT = rnd(5, 11); ghostInteract(); }
+  // ghost event: brief manifestation
+  S.eventCd -= dt;
+  if (S.event > 0) S.event -= dt;
+  else if (S.eventCd <= 0 && inHouse && p.sanity < 85 && dist(g, p) < 7) {
+    S.event = 2.5; S.eventCd = rnd(25, 45); p.sanity = Math.max(0, p.sanity - 8);
+    S.emf.push({ x: g.x, y: g.y, lvl: 4, t: 20 }); S.activity = Math.min(10, S.activity + 3);
+    beep(70, 1.5, 0.08, 'sawtooth'); thud(0.3, 4000, 1.2);
+  }
+}
+
+function update(dt) {
+  const p = S.p, g = S.ghost;
+  S.time += dt;
+  // player
+  const cam = { x: p.x * T - W / 2, y: p.y * T - H / 2 };
+  p.ang = Math.atan2(mouse.y + cam.y - p.y * T, mouse.x + cam.x - p.x * T);
+  if ($('journal').classList.contains('hidden')) {
+    let mx = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+    let my = (keys.KeyS || keys.ArrowDown ? 1 : 0) - (keys.KeyW || keys.ArrowUp ? 1 : 0);
+    const m = Math.hypot(mx, my);
+    const sprint = (keys.ShiftLeft || keys.ShiftRight) && m && p.stamina > 0.05;
+    p.stamina = Math.max(0, Math.min(1, p.stamina + (sprint ? -dt / 3 : dt / 5)));
+    if (m) {
+      const sp = (sprint ? 4.8 : 3.2) * dt / m, r = 0.28, stuck = hits(p.x, p.y, r);
+      if (stuck || !hits(p.x + mx * sp, p.y, r)) p.x += mx * sp;
+      if (stuck || !hits(p.x, p.y + my * sp, r)) p.y += my * sp;
+    }
+  }
+  const pr = roomOf(p.x, p.y), inHouse = !!ROOMS[pr];
+  if (inHouse && !S.lit[pr]) p.sanity = Math.max(0, p.sanity - 0.4 * (g.type.drain || 1) * dt);
+
+  // world state
+  const gr = roomOf(g.x, g.y);
+  for (const r in ROOMS) {
+    const target = r === gr ? (g.type.ev.includes('FREEZE') ? -7 : 3.5) : 18;
+    const rate = (target < S.temp[r] ? 0.35 : 0.1) * dt;
+    S.temp[r] += Math.max(-rate, Math.min(rate, target - S.temp[r]));
+  }
+  S.emf = S.emf.filter(e => (e.t -= dt) > 0);
+  S.prints = S.prints.filter(e => (e.t -= dt) > 0);
+  S.msgs = S.msgs.filter(e => (e.t -= dt) > 0);
+  S.activity = Math.max(0, S.activity - dt * 0.15);
+  S.huntCd -= dt; S.boxCd -= dt; S.boxT -= dt;
+  const fr = roomTiles[g.fav];
+  for (const o of S.orbs) {
+    o.x += o.vx * dt; o.y += o.vy * dt;
+    if (roomMap[Math.floor(o.y)]?.[Math.floor(o.x)] !== g.fav) { const [x, y] = pick(fr); o.vx = (x + 0.5 - o.x) * 0.2; o.vy = (y + 0.5 - o.y) * 0.2; }
+  }
+  updateGhost(dt);
+  if (!S.running) return;
+
+  // once-per-second rolls
+  if ((S.secT += dt) >= 1) {
+    S.secT = 0;
+    const ty = g.type;
+    let thr = ty.thr || 50;
+    if (ty.name === 'Mare') thr = S.lit[pr] ? 40 : 60;
+    if (!S.hunt && S.huntCd <= 0 && inHouse && p.sanity < thr && Math.random() < 0.08 * (ty.eager || 1)) startHunt();
+    if (ty.ev.includes('DOTS') && !S.hunt)
+      for (const d of S.items) if (dotsOn(d) && dist(d, g) < 3.5 && Math.random() < 0.2) g.dotsT = 2;
+  }
+
+  // tool readouts
+  S.emfRead = 1;
+  for (const e of S.emf) if (dist(e, p) < 3) S.emfRead = Math.max(S.emfRead, e.lvl);
+  if (S.hunt && S.hunt.grace <= 0 && dist(g, p) < 8) S.emfRead = pick([1, 2, 3, 4, 5]);
+  if ((S.thermoT -= dt) <= 0) {
+    S.thermoT = 0.8;
+    S.thermoRead = (ROOMS[pr] ? S.temp[pr] : pr === 'truck' ? 16 : 8) + rnd(-0.6, 0.6);
+  }
+  if (heldIs('emf') && S.emfRead > 1 && (S.beepT -= dt) <= 0) { S.beepT = 0.6 / S.emfRead; beep(500 + S.emfRead * 180, 0.05, 0.04); }
+  if (staticGain) staticGain.gain.value = heldIs('box') ? (S.boxT > 0 ? 0.09 : 0.03) : 0;
+  if (S.hunt) {
+    S.flickA = Math.random() < 0.15 ? rnd(0.1, 1) : S.flickA;
+    if ((S.heartT -= dt) <= 0) { S.heartT = Math.max(0.35, Math.min(1, dist(g, p) / 10)); thud(0.6, 90, 0.18); }
+    if (S.hunt.grace <= 0 && Math.random() < dt * 3) thud(0.25 * volAt(g), 250, 0.1); // footsteps
+  } else S.flickA = 1;
+}
+
+/* ---------- Rendering ---------- */
+const hash = (x, y) => ((x * 73856093 ^ y * 19349663) >>> 0) % 100 / 100;
+function roomLit(r) {
+  if (!S.lit[r]) return false;
+  const haunted = (S.hunt && S.hunt.grace <= 0) || S.event > 0;
+  return !(haunted && Math.sin(S.time * 43) + Math.sin(S.time * 17.3) > 0.2);
+}
+function visPoly(p) {
+  const path = new Path2D(), N = 360;
+  for (let i = 0; i < N; i++) {
+    const a = i / N * Math.PI * 2, dx = Math.cos(a), dy = Math.sin(a);
+    let d = 0;
+    while (d < 20) { d += 0.08; if (solid(Math.floor(p.x + dx * d), Math.floor(p.y + dy * d))) { d += 0.45; break; } }
+    path.lineTo((p.x + dx * d) * T, (p.y + dy * d) * T);
+  }
+  path.closePath();
+  return path;
+}
+function cone(c, p, half, rad, col) {
+  const gr = c.createRadialGradient(p.x * T, p.y * T, 4, p.x * T, p.y * T, rad * T);
+  gr.addColorStop(0, col); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  c.fillStyle = gr; c.beginPath(); c.moveTo(p.x * T, p.y * T);
+  c.arc(p.x * T, p.y * T, rad * T, p.ang - half, p.ang + half); c.closePath(); c.fill();
+}
+function drawGhost(g, alpha, col) {
+  const x = g.x * T, y = g.y * T;
+  ctx.globalAlpha = alpha; ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(x, y - 4, 10, Math.PI, 0); ctx.lineTo(x + 10, y + 12);
+  for (let i = 0; i < 4; i++) ctx.lineTo(x + 10 - (i + 0.5) * 5, y + (i % 2 ? 12 : 7));
+  ctx.lineTo(x - 10, y + 12); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = col === '#3f7' ? '#041' : '#fff';
+  ctx.fillRect(x - 5, y - 6, 3, 4); ctx.fillRect(x + 2, y - 6, 3, 4);
+  ctx.globalAlpha = 1;
+}
+
+function draw() {
+  const p = S.p, g = S.ghost;
+  const cx = Math.round(p.x * T - W / 2), cy = Math.round(p.y * T - H / 2);
+  const x0 = Math.max(0, Math.floor(cx / T)), x1 = Math.min(GW - 1, Math.floor((cx + W) / T));
+  const y0 = Math.max(0, Math.floor(cy / T)), y1 = Math.min(GH - 1, Math.floor((cy + H) / T));
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, -cx, -cy);
+
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const c = grid[y][x], px = x * T, py = y * T, rm = ROOMS[roomMap[y][x]];
+    if (c === '#' || (c >= 'A' && c <= 'H')) {
+      ctx.fillStyle = '#34343f'; ctx.fillRect(px, py, T, T);
+      ctx.fillStyle = '#42424f'; ctx.fillRect(px, py, T, 5);
+      if (c !== '#') {
+        const s = switches.find(s => s.tx === x && s.ty === y);
+        ctx.fillStyle = '#ddd'; ctx.fillRect(s.fx * T - 5, s.fy * T - 5, 10, 10);
+        ctx.fillStyle = S.lit[s.room] ? '#fd4' : '#555'; ctx.fillRect(s.fx * T - 2, s.fy * T - 3, 4, 6);
+      }
+    } else if (c === 'X') { ctx.fillStyle = '#4a566b'; ctx.fillRect(px, py, T, T); }
+    else if (c === 't') { ctx.fillStyle = '#74787e'; ctx.fillRect(px, py, T, T); ctx.strokeStyle = '#666a70'; ctx.strokeRect(px + 0.5, py + 0.5, T, T); }
+    else if (c === ' ') { ctx.fillStyle = hash(x, y) > 0.5 ? '#2a3d2a' : '#2e432d'; ctx.fillRect(px, py, T, T); }
+    else if (c === '=') {
+      ctx.fillStyle = ROOMS.h.col; ctx.fillRect(px, py, T, T);
+      ctx.fillStyle = '#7a4a22';
+      if (S.locked) ctx.fillRect(px, py + 10, T, 12); else ctx.fillRect(px, py + 4, 5, T - 4);
+    } else if (rm) {
+      ctx.fillStyle = rm.col; ctx.fillRect(px, py, T, T);
+      ctx.fillStyle = 'rgba(0,0,0,' + (0.04 + hash(x, y) * 0.07) + ')'; ctx.fillRect(px, py, T, T);
+      if (c === '+') {
+        ctx.fillStyle = '#7a4a22';
+        if (isRoomCh(ch(x, y - 1)) || isRoomCh(ch(x, y + 1))) { ctx.fillRect(px, py, 3, T); ctx.fillRect(px + T - 3, py, 3, T); }
+        else { ctx.fillRect(px, py, T, 3); ctx.fillRect(px, py + T - 3, T, 3); }
+      } else if (c === 'k') {
+        ctx.fillStyle = '#4a321c'; ctx.fillRect(px + 1, py + 1, T - 2, T - 2);
+        ctx.strokeStyle = '#a07840'; ctx.lineWidth = 2; ctx.strokeRect(px + 3, py + 3, T - 6, T - 6); ctx.lineWidth = 1;
+      } else if (c === 'o') {
+        ctx.fillStyle = rm.furn; ctx.fillRect(px + (ch(x - 1, y) === 'o' ? 0 : 3), py + (ch(x, y - 1) === 'o' ? 0 : 3),
+          T - (ch(x - 1, y) === 'o' ? 0 : 3) - (ch(x + 1, y) === 'o' ? 0 : 3), T - (ch(x, y - 1) === 'o' ? 0 : 3) - (ch(x, y + 1) === 'o' ? 0 : 3));
+      }
+    }
+  }
+  // items on the floor
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold 11px monospace';
+  for (const it of S.items) {
+    if (it.held) continue;
+    const d = ITEMS[it.type], x = it.x * T, y = it.y * T;
+    ctx.fillStyle = '#111'; ctx.fillRect(x - 8, y - 8, 16, 16);
+    ctx.fillStyle = d.col; ctx.fillRect(x - 7, y - 7, 14, 14);
+    ctx.fillStyle = '#000'; ctx.fillText(it.type === 'book' && it.written ? '✎' : d.g, x, y + 1);
+  }
+
+  // light map
+  const vis = visPoly(p), nv = heldIs('cam');
+  L.setTransform(1, 0, 0, 1, 0, 0); L.globalCompositeOperation = 'source-over'; L.fillStyle = '#000'; L.fillRect(0, 0, W, H);
+  L.setTransform(1, 0, 0, 1, -cx, -cy); L.globalCompositeOperation = 'lighten';
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    if (solid(x, y) || grid[y][x] === 'X') continue;
+    const r = roomMap[y][x];
+    L.fillStyle = r === 'truck' ? 'rgb(215,215,205)' : !r ? 'rgb(95,100,135)' : roomLit(r) ? 'rgb(230,220,195)' : nv ? 'rgb(28,80,34)' : 'rgb(14,14,22)';
+    L.fillRect(x * T - T / 2, y * T - T / 2, T * 2, T * 2);
+  }
+  L.globalCompositeOperation = 'lighter';
+  const amb = L.createRadialGradient(p.x * T, p.y * T, 0, p.x * T, p.y * T, 2 * T);
+  amb.addColorStop(0, 'rgba(120,120,140,0.5)'); amb.addColorStop(1, 'rgba(0,0,0,0)');
+  L.fillStyle = amb; L.fillRect(p.x * T - 2 * T, p.y * T - 2 * T, 4 * T, 4 * T);
+  if (p.flash) {
+    L.globalAlpha = S.flickA;
+    cone(L, p, 0.42, 9, 'rgba(255,245,215,0.95)'); cone(L, p, 0.8, 4, 'rgba(255,245,215,0.3)');
+    L.globalAlpha = 1;
+  }
+  if (heldIs('uv')) cone(L, p, 0.5, 5, 'rgba(140,60,255,0.7)');
+  for (const it of S.items) if (dotsOn(it)) {
+    const gr = L.createRadialGradient(it.x * T, it.y * T, 0, it.x * T, it.y * T, 3.5 * T);
+    gr.addColorStop(0, 'rgba(40,160,70,0.5)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    L.fillStyle = gr; L.fillRect((it.x - 3.5) * T, (it.y - 3.5) * T, 7 * T, 7 * T);
+  }
+  L.globalCompositeOperation = 'destination-in'; L.fillStyle = '#fff'; L.fill(vis);
+  L.setTransform(1, 0, 0, 1, 0, 0); L.globalCompositeOperation = 'destination-over'; L.fillStyle = '#000'; L.fillRect(0, 0, W, H);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(lc, 0, 0);
+  ctx.globalCompositeOperation = 'source-over'; ctx.setTransform(1, 0, 0, 1, -cx, -cy);
+
+  // glowing things, clipped to what the player can see
+  ctx.save(); ctx.clip(vis);
+  for (const it of S.items) if (dotsOn(it)) {
+    ctx.fillStyle = 'rgba(80,255,120,0.8)';
+    for (let i = 0; i < 70; i++) {
+      const a = hash(i, 7) * 6.283, r = Math.sqrt(hash(i, 13)) * 3.4, x = it.x + Math.cos(a) * r, y = it.y + Math.sin(a) * r;
+      if (!solid(Math.floor(x), Math.floor(y))) ctx.fillRect(x * T, y * T, 2, 2);
+    }
+    if (g.dotsT > 0 && dist(it, g) < 4) drawGhost(g, 0.75, '#3f7');
+  }
+  if (heldIs('uv')) for (const f of S.prints) {
+    const d = dist(f, p);
+    let da = Math.abs(Math.atan2(f.y - p.y, f.x - p.x) - p.ang); if (da > Math.PI) da = 2 * Math.PI - da;
+    if (d > 5 || (da > 0.55 && d > 0.8)) continue;
+    ctx.save(); ctx.translate(f.x * T, f.y * T); ctx.rotate(f.rot);
+    ctx.fillStyle = 'rgba(120,255,90,0.9)'; ctx.shadowColor = '#7f5'; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.ellipse(0, 2, 5, 6, 0, 0, 6.3); ctx.fill();
+    for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.ellipse(-6 + i * 4, -7 - (i % 3 ? 2 : 0), 1.6, 3, 0, 0, 6.3); ctx.fill(); }
+    ctx.restore();
+  }
+  if (nv && g.type.ev.includes('ORB')) for (const o of S.orbs) {
+    ctx.fillStyle = 'rgba(230,255,230,0.85)'; ctx.shadowColor = '#fff'; ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(o.x * T, o.y * T, 2.2, 0, 6.3); ctx.fill(); ctx.shadowBlur = 0;
+  }
+  if (S.hunt && S.hunt.grace <= 0) {
+    if ((S.time * 2.2) % 1 < (g.type.flick || 0.5)) drawGhost(g, 0.9, '#1a1a22');
+  } else if (S.event > 0 && Math.sin(S.time * 30) > -0.3) drawGhost(g, 0.6, '#22222c');
+  ctx.restore();
+
+  // player
+  ctx.save(); ctx.translate(p.x * T, p.y * T); ctx.rotate(p.ang);
+  ctx.fillStyle = '#2f4f8f'; ctx.beginPath(); ctx.arc(0, 0, 9, 0, 6.3); ctx.fill();
+  ctx.fillStyle = '#e0b890'; ctx.beginPath(); ctx.arc(2, 0, 5, 0, 6.3); ctx.fill();
+  if (held()) { ctx.fillStyle = ITEMS[held().type].col; ctx.fillRect(8, 3, 7, 5); }
+  ctx.restore();
+  if (S.boxT > 0 && heldIs('box')) {
+    ctx.font = 'bold 14px monospace'; ctx.fillStyle = S.boxText[0] === '.' ? '#888' : '#f44';
+    ctx.fillText(S.boxText, p.x * T, p.y * T - 22);
+  }
+
+  // HUD
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (nv) { ctx.fillStyle = 'rgba(40,255,80,0.06)'; ctx.fillRect(0, 0, W, H); }
+  if (S.hunt) {
+    const v = ctx.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 560);
+    v.addColorStop(0, 'rgba(120,0,0,0)'); v.addColorStop(1, `rgba(120,0,0,${0.3 + 0.15 * Math.sin(S.time * 8)})`);
+    ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  }
+  const room = roomOf(p.x, p.y);
+  ctx.textAlign = 'left'; ctx.font = '14px monospace'; ctx.fillStyle = '#aab';
+  ctx.fillText(ROOMS[room]?.name || (room === 'truck' ? 'Truck' : 'Outside'), 14, 18);
+  ctx.fillStyle = '#223'; ctx.fillRect(14, 30, 80, 5); ctx.fillStyle = '#6c8'; ctx.fillRect(14, 30, 80 * p.stamina, 5);
+  ctx.textAlign = 'center';
+  S.msgs.forEach((m, i) => { ctx.fillStyle = `rgba(255,240,200,${Math.min(1, m.t)})`; ctx.fillText(m.text, W / 2, 60 + i * 20); });
+  if (room === 'truck') {
+    ctx.fillStyle = 'rgba(8,16,20,0.85)'; ctx.fillRect(W - 236, 10, 226, 96);
+    ctx.strokeStyle = '#3a6'; ctx.strokeRect(W - 235.5, 10.5, 225, 95);
+    ctx.textAlign = 'left'; ctx.fillStyle = '#5f9';
+    const t = Math.floor(S.time);
+    ctx.fillText('TRUCK MONITOR', W - 224, 26);
+    ctx.fillText(`Sanity    ${Math.round(p.sanity)}%`, W - 224, 48);
+    ctx.fillText(`Activity  ${'█'.repeat(Math.round(S.activity)).padEnd(10, '·')}`, W - 224, 68);
+    ctx.fillText(`Time      ${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`, W - 224, 88);
+  }
+  // hand slots
+  for (let i = 0; i < 3; i++) {
+    const it = S.inv[i], x = W / 2 - 240 + i * 162, y = H - 54;
+    ctx.fillStyle = 'rgba(10,12,18,0.8)'; ctx.fillRect(x, y, 154, 44);
+    ctx.strokeStyle = i === S.sel ? '#fd6' : '#445'; ctx.strokeRect(x + 0.5, y + 0.5, 154, 44);
+    ctx.textAlign = 'left'; ctx.font = '12px monospace';
+    ctx.fillStyle = '#778'; ctx.fillText(i + 1, x + 6, y + 12);
+    if (!it) continue;
+    ctx.fillStyle = ITEMS[it.type].col; ctx.fillText(ITEMS[it.type].name, x + 20, y + 12);
+    if (i !== S.sel) continue;
+    ctx.fillStyle = '#dde';
+    if (it.type === 'emf') {
+      const cols = ['#4c4', '#9c4', '#dc4', '#e84', '#f33'];
+      for (let l = 0; l < 5; l++) { ctx.fillStyle = l < S.emfRead ? cols[l] : '#333'; ctx.fillRect(x + 20 + l * 22, y + 24, 18, 12); }
+    } else ctx.fillText({
+      thermo: S.thermoRead.toFixed(1) + ' °C', box: S.boxCd > 0 ? 'listening…' : 'click to ask',
+      uv: 'UV on', cam: '● REC night vision', book: it.written ? 'WRITTEN IN!' : 'G: place open', dots: 'G: place on floor',
+      cruc: `G: place (${it.uses} uses)`, pills: 'click to take',
+    }[it.type], x + 20, y + 31);
+  }
+  ctx.textAlign = 'left'; ctx.font = '11px monospace'; ctx.fillStyle = '#556';
+  ctx.fillText('E interact · G drop · F light · J journal', 14, 50);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (S.running) { update(dt); draw(); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
