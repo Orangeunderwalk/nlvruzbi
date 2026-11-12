@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#f5f4ed"><meta name="description" content="Little Wings — a little bird, a big adventure. A beautifully simple browser arcade game.">
+<title>Little Wings — Just one more flight.</title>
+<link rel="stylesheet" href="style.css"><script src="game.js" defer></script>
+</head>
+<body>
+<div class="page">
+<header><a class="brand" href="./" aria-label="Little Wings home"><span class="brand-icon">w</span> little wings<span class="brand-dot">®</span></a><div class="edition"><span class="live-dot"></span> THE BROWSER ARCADE <span class="edition-number">NO. 001</span></div><button class="sound icon-button" id="sound" aria-label="Turn sound on" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 5 6 9H3v6h3l5 4V5Z"/><path id="sound-wave" d="m16 9 6 6m0-6-6 6"/></svg></button></header>
+<main>
+<section class="intro"><div><div class="eyebrow"><span></span> SMALL BIRD. BIG AMBITION.</div><h1>Just one more <em>flight.</em></h1><p>A little courage. A little rhythm. A whole lot of sky.</p></div><div class="intro-note"><svg viewBox="0 0 70 45" fill="none"><path d="M6 6c21-7 8 35 37 17m-8-4 11 2-5 11" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span>easy to play,<br>hard to put down.</span></div></section>
+<section class="game-shell" aria-label="Little Wings game">
+<div class="game-bar"><div class="game-label"><span class="live-dot"></span> THE MEADOW <span class="divider">/</span><span class="level">ENDLESS FLIGHT</span></div><div class="best-label"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h8v5a4 4 0 0 1-8 0V3Zm0 2H3v2a3 3 0 0 0 4 3m7-5h3v2a3 3 0 0 1-4 3m-3 2v4m-3 1h6"/></svg> PERSONAL BEST <strong id="best">00</strong></div></div>
+<div class="playfield" id="playfield"><canvas id="game" width="1200" height="500" aria-label="Fly through the gaps between pipes. Press Space or tap to flap."></canvas>
+<div class="score-display" id="score-display" hidden><span id="score">0</span><small id="flight-state">KEEP GOING, LITTLE BIRD</small></div>
+<div class="overlay" id="overlay"><div class="ready-tag" id="ready-tag">A FRESH LITTLE ADVENTURE</div><h2 id="overlay-title">Meet your new<br><em>sky-high obsession.</em></h2><p id="overlay-copy">Find your rhythm. Mind the pipes. Enjoy the flight.</p><div class="result" id="result" hidden><div>YOUR SCORE<strong id="final-score">0</strong></div><div>PERSONAL BEST<strong id="final-best">0</strong></div></div><button class="play-button" id="play"><span id="play-text">Let's fly</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button><div class="start-hint" id="start-hint">or press <kbd>space</kbd> to take off</div></div>
+<button class="pause-button icon-button" id="pause" aria-label="Pause game" hidden><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h3v14H7zm7 0h3v14h-3z"/></svg></button><div class="scene-label"><span>01 — THE MEADOW</span><span>A GOOD DAY TO FLY ↗</span></div>
+</div>
+<div class="game-footer"><span><span class="keycap">SPACE</span><span class="or">or</span><svg class="tap-icon" viewBox="0 0 20 22" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M7 12V4a2 2 0 0 1 4 0v6l3-1 3 3-1 7H8l-5-6a1.5 1.5 0 0 1 2-2l2 1Z"/></svg> TAP TO FLAP</span><span class="footer-tip">Stay light. Keep going.</span><span><kbd>P</kbd> PAUSE <span class="footer-dot">·</span> <kbd>R</kbd> RESTART</span></div>
+</section>
+<section class="below"><div class="how"><span class="section-index">HOW TO FLY</span><div><span class="step">01</span><p><strong>Tap to take off</strong><span>Space, click, or a little tap.</span></p></div><div><span class="step">02</span><p><strong>Find the gap</strong><span>One pipe. One point. You got this.</span></p></div><div><span class="step">03</span><p><strong>Beat your best</strong><span>The sky's not the limit.</span></p></div></div><div class="made-for">NO DOWNLOADS. NO DRAMA.<br><span>Just you and the next gap.</span></div></section>
+</main><footer class="page-footer"><span>© 2026 LITTLE WINGS</span><span>Made for the joy of a little play. <span class="flower">✳</span></span></footer>
+</div>
+</body></html>
